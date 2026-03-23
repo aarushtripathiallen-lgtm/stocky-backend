@@ -94,12 +94,14 @@ def predict():
 # =========================
 # RUN SERVER
 # =========================
-import os
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
+const response = await fetch('https://stocky-api-7x6p.onrender.com', { 
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message: userInput })
+});
 
 
 
