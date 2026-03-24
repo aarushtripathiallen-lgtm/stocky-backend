@@ -91,7 +91,10 @@ def predict():
         'symbol': symbol,
         'prediction': predictions
     })
-
+@app.route('/trending', methods=['GET'])
+def trending():
+  
+    return jsonify(results)
 
 # =========================
 # RUN SERVER
