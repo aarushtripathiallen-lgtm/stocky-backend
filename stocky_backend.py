@@ -15,9 +15,10 @@ def home():
 # =========================
 # CHATBOT API
 # =========================
-@app.route('/chat', methods=['POST'])
+@app.route('/chat', methods=['GET', 'POST'])
 def chat():
-    msg = request.json.get('message', '').upper()
+    
+    message = request.args.get('message') or request.json.get('message')
 
     greetings = ['HI', 'HELLO', 'HEY']
     symbols = ['AAPL', 'MSFT', 'TSLA', 'GOOG', 'AMZN']
