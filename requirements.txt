@@ -1,5 +1,6 @@
-flask
-flask-cors
+Flask
+gunicorn
 yfinance
-numpy
-scikit-learn
+google-generativeai
+feedparser
+python-dotenv
