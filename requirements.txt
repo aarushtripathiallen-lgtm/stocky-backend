@@ -1,6 +1,6 @@
 Flask
 gunicorn
 yfinance
-google-generativeai
+google-genai
 feedparser
 python-dotenv
