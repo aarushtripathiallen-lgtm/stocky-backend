@@ -18,7 +18,12 @@ if not api_key:
 else:
     client = genai.Client(api_key=api_key)
 
+# ... other imports ...
+from flask_cors import CORS 
+
 app = Flask(__name__)
+
+CORS(app, resources={r"/*": {"origins": "https://aarustripathiallen-lgtm.github.io"}})
 
 # 3. CONFIGURATION
 stock_map = {
@@ -163,10 +168,10 @@ def sentiment():
 # --------------------------------
 @app.route("/chat")
 def chat():
+    if client is None:
+        return jsonify({"reply": "AI is currently offline. Please check the API key."})
+    
     user_message = request.args.get("message", "")
-
-    if not user_message:
-        return jsonify({"reply": "Please ask a question."})
 
     try:
         # UPDATED: Using the 2026 Stable Model
