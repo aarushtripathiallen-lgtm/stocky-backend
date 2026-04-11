@@ -2,7 +2,6 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS 
 import yfinance as yf
-import pandas as pd
 import numpy as np
 import feedparser
 from google import genai
@@ -14,14 +13,12 @@ api_key = os.getenv("GEMINI_API_KEY")
 
 # INIT AI
 if not api_key:
-    print("CRITICAL ERROR: No API Key found in .env file!")
+    print("WARNING: No Gemini API Key found. Using fallback AI.")
     client = None
 else:
     client = genai.Client(api_key=api_key)
 
 app = Flask(__name__)
-
-# CORS FIX
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 stock_map = {
@@ -45,17 +42,19 @@ def stock():
         if data.empty:
             return jsonify({"error": "No data found"}), 404
 
+        prices = data["Close"].ffill().round(2).tolist()
+
         return jsonify({
             "symbol": symbol,
             "dates": data.index.strftime("%Y-%m-%d").tolist(),
-            "prices": data["Close"].fillna(method="ffill").round(2).tolist()
+            "prices": prices
         })
 
     except Exception as e:
         print("STOCK ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ---------------- DETAILS (FIXED) ----------------
+# ---------------- DETAILS ----------------
 @app.route("/details")
 def details():
     query = request.args.get("symbol", "AAPL")
@@ -63,8 +62,6 @@ def details():
 
     try:
         ticker = yf.Ticker(symbol)
-
-        # 🔥 IMPORTANT FIX: fallback using history
         hist = ticker.history(period="2d")
 
         if hist.empty:
@@ -74,7 +71,6 @@ def details():
         prev_price = round(hist["Close"].iloc[-2], 2) if len(hist) > 1 else latest_price
         change = round(latest_price - prev_price, 2)
 
-        # Try info but don't depend on it
         info = ticker.info if ticker.info else {}
 
         market_cap = info.get("marketCap", 0)
@@ -82,7 +78,6 @@ def details():
         high_52 = info.get("fiftyTwoWeekHigh", latest_price)
         low_52 = info.get("fiftyTwoWeekLow", latest_price)
 
-        # Format market cap
         if market_cap:
             if market_cap > 1_000_000_000_000:
                 mc_str = f"${market_cap / 1_000_000_000_000:.2f}T"
@@ -133,12 +128,9 @@ def predict():
         print("PREDICT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ---------------- SENTIMENT ----------------
+# ---------------- SENTIMENT (WITH FALLBACK) ----------------
 @app.route("/sentiment")
 def sentiment():
-    if client is None:
-        return jsonify({"error": "AI not configured"}), 500
-
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
 
@@ -151,41 +143,80 @@ def sentiment():
         if not headlines:
             return jsonify({"sentiment": "No news found."})
 
-        prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
+        # TRY GEMINI
+        if client:
+            try:
+                prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
 
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
+                response = client.models.generate_content(
+                    model="gemini-3.1-flash",
+                    contents=prompt
+                )
 
-        return jsonify({"sentiment": response.text})
+                return jsonify({"sentiment": response.text})
+
+            except Exception as ai_error:
+                print("GEMINI FAILED:", ai_error)
+
+        # FALLBACK LOGIC
+        positive_words = ["gain", "rise", "up", "surge", "profit", "growth"]
+        negative_words = ["fall", "drop", "loss", "down", "decline"]
+
+        score = 0
+        for h in headlines:
+            for word in positive_words:
+                if word in h.lower():
+                    score += 1
+            for word in negative_words:
+                if word in h.lower():
+                    score -= 1
+
+        if score > 0:
+            sentiment = "📈 Positive sentiment based on recent news."
+        elif score < 0:
+            sentiment = "📉 Negative sentiment based on recent news."
+        else:
+            sentiment = "⚖️ Neutral sentiment based on recent news."
+
+        return jsonify({"sentiment": sentiment})
 
     except Exception as e:
         print("SENTIMENT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ---------------- CHAT ----------------
+# ---------------- CHAT (WITH FALLBACK) ----------------
 @app.route("/chat")
 def chat():
-    if client is None:
-        return jsonify({"reply": "AI not available"})
-
     user_message = request.args.get("message", "")
 
     if not user_message:
         return jsonify({"reply": "Please ask something."})
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=user_message
-        )
+    # TRY GEMINI
+    if client:
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=user_message
+            )
+            return jsonify({"reply": response.text})
 
-        return jsonify({"reply": response.text})
+        except Exception as e:
+            print("GEMINI CHAT FAILED:", e)
 
-    except Exception as e:
-        print("CHAT ERROR:", e)
-        return jsonify({"reply": "AI error occurred"})
+    # FALLBACK BOT
+    msg = user_message.lower()
+
+    if "price" in msg:
+        reply = "Search any stock above to see its latest price 📈"
+    elif "trend" in msg:
+        reply = "Check the chart above — green means upward trend 🚀"
+    elif "hello" in msg:
+        reply = "Hey! I'm your Stocky assistant 🤖"
+    else:
+        reply = "I'm currently in offline mode, but still here to help!"
+
+    return jsonify({"reply": reply})
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
