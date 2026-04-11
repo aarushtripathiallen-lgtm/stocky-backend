@@ -1,5 +1,6 @@
 import os
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify
+from flask_cors import CORS 
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -7,25 +8,22 @@ import feedparser
 from google import genai
 from dotenv import load_dotenv
 
-# 1. LOAD THE SECRET KEY
+# LOAD ENV
 load_dotenv() 
 api_key = os.getenv("GEMINI_API_KEY")
 
-# 2. INITIALIZE THE AI CLIENT
+# INIT AI
 if not api_key:
     print("CRITICAL ERROR: No API Key found in .env file!")
     client = None
 else:
     client = genai.Client(api_key=api_key)
 
-# ... other imports ...
-from flask_cors import CORS 
-
 app = Flask(__name__)
 
-CORS(app, resources={r"/*": {"origins": "https://aarustripathiallen-lgtm.github.io"}})
+# CORS FIX
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# 3. CONFIGURATION
 stock_map = {
     "apple": "AAPL", "tesla": "TSLA", "nvidia": "NVDA",
     "amazon": "AMZN", "google": "GOOGL", "microsoft": "MSFT", "meta": "META"
@@ -35,172 +33,161 @@ def get_symbol(query):
     query = query.lower().strip()
     return stock_map.get(query, query.upper())
 
-# 4. ROUTES
-@app.route("/")
-def home():
-    return render_template("index.html")
-
+# ---------------- STOCK CHART ----------------
 @app.route("/stock")
 def stock():
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
+
     try:
         data = yf.Ticker(symbol).history(period="6mo")
+
         if data.empty:
             return jsonify({"error": "No data found"}), 404
+
         return jsonify({
             "symbol": symbol,
             "dates": data.index.strftime("%Y-%m-%d").tolist(),
-            "prices": data["Close"].round(2).tolist()
+            "prices": data["Close"].fillna(method="ffill").round(2).tolist()
         })
+
     except Exception as e:
+        print("STOCK ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
+# ---------------- DETAILS (FIXED) ----------------
 @app.route("/details")
 def details():
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
-    
+
     try:
         ticker = yf.Ticker(symbol)
-        info = ticker.info
-        
-        # Format large numbers for readability (e.g., billions/trillions)
+
+        # 🔥 IMPORTANT FIX: fallback using history
+        hist = ticker.history(period="2d")
+
+        if hist.empty:
+            return jsonify({"error": "No data"}), 404
+
+        latest_price = round(hist["Close"].iloc[-1], 2)
+        prev_price = round(hist["Close"].iloc[-2], 2) if len(hist) > 1 else latest_price
+        change = round(latest_price - prev_price, 2)
+
+        # Try info but don't depend on it
+        info = ticker.info if ticker.info else {}
+
         market_cap = info.get("marketCap", 0)
-        if market_cap > 1_000_000_000_000:
-            mc_str = f"${market_cap / 1_000_000_000_000:.2f}T"
-        elif market_cap > 1_000_000_000:
-            mc_str = f"${market_cap / 1_000_000_000:.2f}B"
+        pe_ratio = info.get("trailingPE", "N/A")
+        high_52 = info.get("fiftyTwoWeekHigh", latest_price)
+        low_52 = info.get("fiftyTwoWeekLow", latest_price)
+
+        # Format market cap
+        if market_cap:
+            if market_cap > 1_000_000_000_000:
+                mc_str = f"${market_cap / 1_000_000_000_000:.2f}T"
+            elif market_cap > 1_000_000_000:
+                mc_str = f"${market_cap / 1_000_000_000:.2f}B"
+            else:
+                mc_str = f"${market_cap:,}"
         else:
-            mc_str = f"${market_cap:,}"
+            mc_str = "N/A"
 
         return jsonify({
             "symbol": symbol,
-            "price": info.get("currentPrice", "N/A"),
-            "change": round(info.get("currentPrice", 0) - info.get("regularMarketPreviousClose", 0), 2),
+            "price": latest_price,
+            "change": change,
             "market_cap": mc_str,
-            "pe_ratio": info.get("trailingPE", "N/A"),
-            "high_52": info.get("fiftyTwoWeekHigh", "N/A"),
-            "low_52": info.get("fiftyTwoWeekLow", "N/A")
+            "pe_ratio": pe_ratio,
+            "high_52": high_52,
+            "low_52": low_52
         })
+
     except Exception as e:
+        print("DETAILS ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-@app.route("/compare")
-def compare():
-    # Example query: "AAPL, TSLA, MSFT"
-    query = request.args.get("symbols", "AAPL,TSLA")
-    
-    # Clean up the input (remove spaces and convert to uppercase)
-    raw_symbols = [s.strip() for s in query.split(",")]
-    
-    # Limit to 3 stocks so the chart doesn't get too messy
-    symbols = [get_symbol(s) for s in raw_symbols][:3] 
-    
-    combined_data = {}
-    shared_dates = None
-    
-    try:
-        for sym in symbols:
-            ticker = yf.Ticker(sym)
-            hist = ticker.history(period="6mo")
-            
-            if not hist.empty:
-                # Use the dates from the first successful stock to align the X-axis
-                if shared_dates is None:
-                    shared_dates = hist.index.strftime('%Y-%m-%d').tolist()
-                
-                # Save the prices for this specific symbol
-                combined_data[sym] = hist['Close'].round(2).tolist()
-                
-        return jsonify({
-            "dates": shared_dates,
-            "prices": combined_data
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+# ---------------- PREDICTION ----------------
 @app.route("/predict")
 def predict():
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
-    data = yf.Ticker(symbol).history(period="1y")
-    if len(data) < 10:
-        return jsonify({"error": "Not enough data"}), 400
-    
-    prices = data["Close"].values
-    x = np.arange(len(prices))
-    coeff = np.polyfit(x, prices, 1)
-    future_indices = np.arange(len(prices), len(prices) + 5)
-    prediction = (coeff[0] * future_indices + coeff[1]).round(2).tolist()
-    return jsonify({"symbol": symbol, "prediction": prediction})
-
-# --------------------------------
-# SENTIMENT ANALYSIS
-# --------------------------------
-@app.route("/sentiment")
-def sentiment():
-    query = request.args.get("symbol", "AAPL")
-    symbol = get_symbol(query)
-    
-    url = f"https://news.google.com/rss/search?q={symbol}+stock"
-    feed = feedparser.parse(url)
-    headlines = [entry.title for entry in feed.entries[:5]]
-
-    if not headlines:
-        return jsonify({"sentiment": "No news found."})
-
-    prompt = f"Analyze these {symbol} headlines: {' | '.join(headlines)}"
 
     try:
-        # UPDATED: Using the 2026 Stable Model
+        data = yf.Ticker(symbol).history(period="1y")
+
+        if len(data) < 10:
+            return jsonify({"error": "Not enough data"}), 400
+        
+        prices = data["Close"].values
+        x = np.arange(len(prices))
+
+        coeff = np.polyfit(x, prices, 1)
+        future_indices = np.arange(len(prices), len(prices) + 5)
+
+        prediction = (coeff[0] * future_indices + coeff[1]).round(2).tolist()
+
+        return jsonify({"symbol": symbol, "prediction": prediction})
+
+    except Exception as e:
+        print("PREDICT ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- SENTIMENT ----------------
+@app.route("/sentiment")
+def sentiment():
+    if client is None:
+        return jsonify({"error": "AI not configured"}), 500
+
+    query = request.args.get("symbol", "AAPL")
+    symbol = get_symbol(query)
+
+    try:
+        url = f"https://news.google.com/rss/search?q={symbol}+stock"
+        feed = feedparser.parse(url)
+
+        headlines = [entry.title for entry in feed.entries[:5]]
+
+        if not headlines:
+            return jsonify({"sentiment": "No news found."})
+
+        prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
+
         response = client.models.generate_content(
-            model="gemini-2.5-flash", 
+            model="gemini-2.0-flash",
             contents=prompt
         )
-        return jsonify({"sentiment": response.text})
-    except Exception as e:
-        print("Sentiment Error:", e)
-        return jsonify({"error": "AI failed"})
 
-# --------------------------------
-# CHATBOT
-# --------------------------------
+        return jsonify({"sentiment": response.text})
+
+    except Exception as e:
+        print("SENTIMENT ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+# ---------------- CHAT ----------------
 @app.route("/chat")
 def chat():
     if client is None:
-        return jsonify({"reply": "AI is currently offline. Please check the API key."})
-    
+        return jsonify({"reply": "AI not available"})
+
     user_message = request.args.get("message", "")
 
+    if not user_message:
+        return jsonify({"reply": "Please ask something."})
+
     try:
-        # UPDATED: Using the 2026 Stable Model
         response = client.models.generate_content(
-            model="gemini-2.5-flash", 
+            model="gemini-2.0-flash",
             contents=user_message
         )
 
-        # UPDATED: Simplified response reading
-        reply = response.text
+        return jsonify({"reply": response.text})
 
     except Exception as e:
-        print("Gemini Error:", e)
-        reply = "Sorry, I'm having trouble connecting to my brain. Check terminal for details."
+        print("CHAT ERROR:", e)
+        return jsonify({"reply": "AI error occurred"})
 
-    return jsonify({"reply": reply})
-@app.route("/trending")
-def trending():
-    symbols = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT"]
-    results = []
-    for sym in symbols:
-        data = yf.Ticker(sym).history(period="2d")
-        if len(data) >= 2:
-            price = round(data["Close"].iloc[-1], 2)
-            change = round(price - data["Close"].iloc[-2], 2)
-            results.append({"symbol": sym, "price": price, "change": change})
-    return jsonify(results)
-
+# ---------------- RUN ----------------
 if __name__ == "__main__":
-    
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
