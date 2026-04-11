@@ -1,6 +1,9 @@
-Flask
-gunicorn
+flask
+flask-cors
 yfinance
-google-genai
+pandas
+numpy
 feedparser
+google-genai
 python-dotenv
+gunicorn
