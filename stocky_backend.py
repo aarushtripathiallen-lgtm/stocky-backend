@@ -1,17 +1,20 @@
 import os
-from flask import Flask, request, jsonify
-from flask_cors import CORS 
+from flask import Flask, request, jsonify, session
+from flask_cors import CORS
 import yfinance as yf
 import numpy as np
 import feedparser
 from google import genai
 from dotenv import load_dotenv
 
-# LOAD ENV
-load_dotenv() 
+# 1. LOAD ENV
+load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 
-# INIT AI
+# 2. INIT AI
+# Using Gemini 3.1 Flash for both speed and cost-efficiency
+MODEL_ID = "gemini-3.1-flash"
+
 if not api_key:
     print("WARNING: No Gemini API Key found. Using fallback AI.")
     client = None
@@ -19,6 +22,8 @@ else:
     client = genai.Client(api_key=api_key)
 
 app = Flask(__name__)
+# Set a secret key to use Flask Sessions for chat memory
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "stocky_secret_123")
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 stock_map = {
@@ -128,7 +133,7 @@ def predict():
         print("PREDICT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ---------------- SENTIMENT (WITH FALLBACK) ----------------
+# ---------------- SENTIMENT ----------------
 @app.route("/sentiment")
 def sentiment():
     query = request.args.get("symbol", "AAPL")
@@ -137,54 +142,37 @@ def sentiment():
     try:
         url = f"https://news.google.com/rss/search?q={symbol}+stock"
         feed = feedparser.parse(url)
-
         headlines = [entry.title for entry in feed.entries[:5]]
 
         if not headlines:
             return jsonify({"sentiment": "No news found."})
 
-        # TRY GEMINI
+        # USE UPDATED MODEL: Gemini 3.1 Flash
         if client:
             try:
-                prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
-
+                prompt = f"Analyze sentiment for {symbol} stock based on these headlines: {' | '.join(headlines)}. Provide a brief summary."
                 response = client.models.generate_content(
-                    model="gemini-3.1-flash",
+                    model=MODEL_ID,
                     contents=prompt
                 )
-
                 return jsonify({"sentiment": response.text})
-
             except Exception as ai_error:
-                print("GEMINI FAILED:", ai_error)
+                print("GEMINI SENTIMENT FAILED:", ai_error)
 
         # FALLBACK LOGIC
         positive_words = ["gain", "rise", "up", "surge", "profit", "growth"]
         negative_words = ["fall", "drop", "loss", "down", "decline"]
+        score = sum(1 for h in headlines for w in positive_words if w in h.lower())
+        score -= sum(1 for h in headlines for w in negative_words if w in h.lower())
 
-        score = 0
-        for h in headlines:
-            for word in positive_words:
-                if word in h.lower():
-                    score += 1
-            for word in negative_words:
-                if word in h.lower():
-                    score -= 1
-
-        if score > 0:
-            sentiment = "📈 Positive sentiment based on recent news."
-        elif score < 0:
-            sentiment = "📉 Negative sentiment based on recent news."
-        else:
-            sentiment = "⚖️ Neutral sentiment based on recent news."
-
-        return jsonify({"sentiment": sentiment})
+        sentiment_msg = "📈 Positive" if score > 0 else "📉 Negative" if score < 0 else "⚖️ Neutral"
+        return jsonify({"sentiment": f"{sentiment_msg} sentiment based on recent news."})
 
     except Exception as e:
         print("SENTIMENT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ---------------- CHAT (WITH FALLBACK) ----------------
+# ---------------- CHAT (WITH MEMORY & 3.1 FLASH) ----------------
 @app.route("/chat")
 def chat():
     user_message = request.args.get("message", "")
@@ -192,13 +180,28 @@ def chat():
     if not user_message:
         return jsonify({"reply": "Please ask something."})
 
-    # TRY GEMINI
     if client:
         try:
+            # Simple list-based history in session
+            if "history" not in session:
+                session["history"] = []
+
+            # Add user message to history
+            session["history"].append({"role": "user", "parts": [{"text": user_message}]})
+
+            # Generate response using unified Gemini 3.1 Flash
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=user_message
+                model=MODEL_ID,
+                contents=session["history"]
             )
+
+            # Add AI response to history
+            session["history"].append({"role": "model", "parts": [{"text": response.text}]})
+            
+            # Keep history manageable (last 10 messages)
+            if len(session["history"]) > 10:
+                session["history"] = session["history"][-10:]
+
             return jsonify({"reply": response.text})
 
         except Exception as e:
@@ -206,11 +209,8 @@ def chat():
 
     # FALLBACK BOT
     msg = user_message.lower()
-
     if "price" in msg:
         reply = "Search any stock above to see its latest price 📈"
-    elif "trend" in msg:
-        reply = "Check the chart above — green means upward trend 🚀"
     elif "hello" in msg:
         reply = "Hey! I'm your Stocky assistant 🤖"
     else:
