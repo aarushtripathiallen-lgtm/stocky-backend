@@ -19,11 +19,6 @@ else:
     client = genai.Client(api_key=api_key)
 
 app = Flask(__name__)
-<<<<<<< HEAD
-=======
-
-# CORS FIX
->>>>>>> 96d794b (Fixed chat display)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 stock_map = {
@@ -47,30 +42,19 @@ def stock():
         if data.empty:
             return jsonify({"error": "No data found"}), 404
 
-<<<<<<< HEAD
         prices = data["Close"].ffill().round(2).tolist()
 
         return jsonify({
             "symbol": symbol,
             "dates": data.index.strftime("%Y-%m-%d").tolist(),
             "prices": prices
-=======
-        return jsonify({
-            "symbol": symbol,
-            "dates": data.index.strftime("%Y-%m-%d").tolist(),
-            "prices": data["Close"].fillna(method="ffill").round(2).tolist()
->>>>>>> 96d794b (Fixed chat display)
         })
 
     except Exception as e:
         print("STOCK ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-<<<<<<< HEAD
 # ---------------- DETAILS ----------------
-=======
-# ---------------- DETAILS (FIXED) ----------------
->>>>>>> 96d794b (Fixed chat display)
 @app.route("/details")
 def details():
     query = request.args.get("symbol", "AAPL")
@@ -78,7 +62,6 @@ def details():
 
     try:
         ticker = yf.Ticker(symbol)
-
         hist = ticker.history(period="5d")
 
         if hist.empty:
@@ -101,7 +84,6 @@ def details():
     except Exception as e:
         print("DETAILS ERROR:", e)
 
-        # 🔥 FALLBACK DATA (prevents undefined UI)
         return jsonify({
             "symbol": symbol,
             "price": 0,
@@ -138,25 +120,15 @@ def predict():
         print("PREDICT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-<<<<<<< HEAD
 # ---------------- SENTIMENT (WITH FALLBACK) ----------------
 @app.route("/sentiment")
 def sentiment():
-=======
-# ---------------- SENTIMENT ----------------
-@app.route("/sentiment")
-def sentiment():
-    if client is None:
-        return jsonify({"error": "AI not configured"}), 500
-
->>>>>>> 96d794b (Fixed chat display)
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
 
     try:
         url = f"https://news.google.com/rss/search?q={symbol}+stock"
         feed = feedparser.parse(url)
-<<<<<<< HEAD
 
         headlines = [entry.title for entry in feed.entries[:5]]
 
@@ -166,10 +138,10 @@ def sentiment():
         # TRY GEMINI
         if client:
             try:
-                prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
+                prompt = f"Analyze sentiment for {symbol}: {' | '.join(headlines)}"
 
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-1.5-flash",
                     contents=prompt
                 )
 
@@ -178,7 +150,7 @@ def sentiment():
             except Exception as ai_error:
                 print("GEMINI FAILED:", ai_error)
 
-        # FALLBACK LOGIC
+        # FALLBACK
         positive_words = ["gain", "rise", "up", "surge", "profit", "growth"]
         negative_words = ["fall", "drop", "loss", "down", "decline"]
 
@@ -199,28 +171,11 @@ def sentiment():
             sentiment = "⚖️ Neutral sentiment based on recent news."
 
         return jsonify({"sentiment": sentiment})
-=======
-
-        headlines = [entry.title for entry in feed.entries[:5]]
-
-        if not headlines:
-            return jsonify({"sentiment": "No news found."})
-
-        prompt = f"Analyze sentiment for {symbol} stock: {' | '.join(headlines)}"
-
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-
-        return jsonify({"sentiment": response.text})
->>>>>>> 96d794b (Fixed chat display)
 
     except Exception as e:
         print("SENTIMENT ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-<<<<<<< HEAD
 # ---------------- CHAT (WITH FALLBACK) ----------------
 @app.route("/chat")
 def chat():
@@ -236,7 +191,9 @@ def chat():
                 model="gemini-1.5-flash",
                 contents=user_message
             )
-            return jsonify({"reply": response.text})
+
+            if response and hasattr(response, "text"):
+                return jsonify({"reply": response.text})
 
         except Exception as e:
             print("GEMINI CHAT FAILED:", e)
@@ -245,39 +202,17 @@ def chat():
     msg = user_message.lower()
 
     if "price" in msg:
-        reply = "Search any stock above to see its latest price 📈"
+        reply = "Search a stock above to see its price 📈"
+    elif "tesla" in msg:
+        reply = "Tesla (TSLA) is one of the most volatile stocks 🚗"
     elif "trend" in msg:
         reply = "Check the chart above — green means upward trend 🚀"
-    elif "hello" in msg:
+    elif "hello" in msg or "hi" in msg:
         reply = "Hey! I'm your Stocky assistant 🤖"
     else:
-        reply = "I'm currently in offline mode, but still here to help!"
+        reply = "I'm in offline AI mode but still here to help!"
 
     return jsonify({"reply": reply})
-=======
-# ---------------- CHAT ----------------
-@app.route("/chat")
-def chat():
-    if client is None:
-        return jsonify({"reply": "AI not available"})
-
-    user_message = request.args.get("message", "")
-
-    if not user_message:
-        return jsonify({"reply": "Please ask something."})
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=user_message
-        )
-
-        return jsonify({"reply": response.text})
-
-    except Exception as e:
-        print("CHAT ERROR:", e)
-        return jsonify({"reply": "AI error occurred"})
->>>>>>> 96d794b (Fixed chat display)
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
