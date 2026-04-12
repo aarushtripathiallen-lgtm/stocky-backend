@@ -20,6 +20,8 @@ else:
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Pre-defined map for common tickers
 stock_map = {
     "apple": "AAPL", "tesla": "TSLA", "nvidia": "NVDA",
     "amazon": "AMZN", "google": "GOOGL", "microsoft": "MSFT", "meta": "META"
@@ -78,10 +80,10 @@ def stock():
 
 # ---------------- DETAILS ----------------
 @app.route("/details")
-def details():␊
+def details():
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
- try:
+    try:
         ticker, fast_info, info, hist_1y = fetch_snapshot(symbol)
         hist = ticker.history(period="5d")
 
@@ -123,7 +125,6 @@ def details():␊
 
     except Exception as e:
         print("DETAILS ERROR:", e)
-
         return jsonify({
             "symbol": symbol,
             "price": 0,
@@ -162,22 +163,22 @@ def predict():
 
 # ---------------- SENTIMENT (WITH FALLBACK) ----------------
 @app.route("/sentiment")
-def sentiment():␊
+def sentiment():
     query = request.args.get("symbol", "AAPL")
     symbol = get_symbol(query)
 
     try:
         url = f"https://news.google.com/rss/search?q={symbol}+stock"
         feed = feedparser.parse(url)
- headlines = [entry.title for entry in feed.entries[:10]]
+        headlines = [entry.title for entry in feed.entries[:10]]
 
         if not headlines:
             return jsonify({"sentiment": "No news found."})
 
-        # TRY GEMINI
+        # TRY GEMINI AI
         if client:
             try:
-                 prompt = (
+                prompt = (
                     f"You are a stock news analyst. Analyze sentiment for {symbol} "
                     f"using these headlines: {' | '.join(headlines)}. "
                     "Respond in 4 short sections with labels exactly as:\n"
@@ -198,7 +199,7 @@ def sentiment():␊
             except Exception as ai_error:
                 print("GEMINI FAILED:", ai_error)
 
-        # FALLBACK
+        # FALLBACK ANALYSIS
         positive_words = ["gain", "rise", "up", "surge", "profit", "growth"]
         negative_words = ["fall", "drop", "loss", "down", "decline"]
 
@@ -210,7 +211,8 @@ def sentiment():␊
             for word in negative_words:
                 if word in h.lower():
                     score -= 1
- if score > 1:
+        
+        if score > 1:
             sentiment_label = "Positive"
         elif score < -1:
             sentiment_label = "Negative"
@@ -219,7 +221,7 @@ def sentiment():␊
 
         confidence = min(95, 55 + abs(score) * 8)
         top_drivers = "\n".join([f"- {headline}" for headline in headlines[:3]])
-        sentiment = (
+        sentiment_summary = (
             f"Overall sentiment: {sentiment_label}\n"
             f"Confidence: {confidence}%\n"
             "Drivers:\n"
@@ -229,7 +231,7 @@ def sentiment():␊
             "- Confirm with earnings guidance and valuation metrics."
         )
 
-        return jsonify({"sentiment": sentiment})
+        return jsonify({"sentiment": sentiment_summary})
 
     except Exception as e:
         print("SENTIMENT ERROR:", e)
@@ -248,7 +250,7 @@ def chat():
     if not user_message:
         return jsonify({"reply": "Please ask something."})
 
-    # TRY GEMINI
+    # TRY GEMINI AI
     if client:
         try:
             response = client.models.generate_content(
@@ -302,5 +304,6 @@ def chat():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
+    # Render uses the PORT environment variable
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
