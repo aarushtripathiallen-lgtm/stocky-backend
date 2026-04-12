@@ -238,6 +238,7 @@ def sentiment():
         return jsonify({"error": str(e)}), 500
 
 # ---------------- CHAT (WITH FALLBACK) ----------------
+# ---------------- CHAT (WITH FALLBACK) ----------------
 @app.route("/chat", methods=["GET", "POST"])
 def chat():
     user_message = request.args.get("message", "")
@@ -250,12 +251,22 @@ def chat():
     if not user_message:
         return jsonify({"reply": "Please ask something."})
 
-    # TRY GEMINI AI
+    # TRY GEMINI AI (Educational Persona)
     if client:
         try:
+            # Give the AI strict instructions on how to behave
+            system_prompt = (
+                "You are Stocky, an educational financial assistant. "
+                "Your goal is to help beginners understand the stock market, investing, and financial concepts. "
+                "Keep your answers concise, easy to understand, and objective. "
+                "IMPORTANT: Never provide direct financial advice (e.g., 'You should buy AAPL'). "
+                "Instead, explain pros, cons, and how things work. "
+                f"The user is asking: {user_message}"
+            )
+
             response = client.models.generate_content(
                 model="gemini-1.5-flash",
-                contents=user_message
+                contents=system_prompt
             )
 
             if response and hasattr(response, "text"):
@@ -264,7 +275,7 @@ def chat():
         except Exception as e:
             print("GEMINI CHAT FAILED:", e)
 
-    # FALLBACK BOT
+    # FALLBACK BOT (Triggers if API key is missing or Google is down)
     msg = user_message.lower()
     mentioned_symbol = None
     for company, ticker in stock_map.items():
@@ -296,12 +307,11 @@ def chat():
         reply = "Hey! I'm your Stocky assistant 🤖 Ask me about a ticker, valuation, or sentiment."
     else:
         reply = (
-            "I'm in offline AI mode but still here to help. "
+            "I'm currently in offline mode, but I can still check live data! "
             "Try: 'AAPL price', 'TSLA market cap', or 'NVDA sentiment'."
         )
 
     return jsonify({"reply": reply})
-
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     # Render uses the PORT environment variable
