@@ -1,4 +1,5 @@
 import os
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS 
 import yfinance as yf
@@ -63,6 +64,10 @@ def details():
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="5d")
+        
+        # Fetch detailed info dicts
+        info = ticker.info or {}
+        fast_info = ticker.fast_info or {}
 
         if hist.empty:
             raise Exception("No data")
@@ -71,14 +76,39 @@ def details():
         prev_price = round(hist["Close"].iloc[-2], 2) if len(hist) > 1 else latest_price
         change = round(latest_price - prev_price, 2)
 
+        # IMPROVED MARKET CAP LOGIC
+        market_cap = (
+            info.get("marketCap") or 
+            fast_info.get("market_cap") or 
+            info.get("enterpriseValue")
+        )
+        
+        # Manual fallback calculation
+        if not market_cap:
+            shares = info.get("sharesOutstanding")
+            price = info.get("currentPrice") or fast_info.get("last_price") or latest_price
+            if shares and price:
+                market_cap = shares * price
+
+        # IMPROVED P/E RATIO LOGIC
+        pe_ratio = (
+            info.get("trailingPE") or 
+            info.get("forwardPE") or 
+            fast_info.get("trailing_pe")
+        )
+
+        # Better 52W High/Low fallback
+        high_52 = info.get("fiftyTwoWeekHigh", latest_price)
+        low_52 = info.get("fiftyTwoWeekLow", latest_price)
+
         return jsonify({
             "symbol": symbol,
             "price": latest_price,
             "change": change,
-            "market_cap": "N/A",
-            "pe_ratio": "N/A",
-            "high_52": latest_price,
-            "low_52": latest_price
+            "market_cap": market_cap if market_cap else "N/A",
+            "pe_ratio": round(pe_ratio, 2) if pe_ratio else "N/A",
+            "high_52": round(high_52, 2) if isinstance(high_52, (int, float)) else "N/A",
+            "low_52": round(low_52, 2) if isinstance(low_52, (int, float)) else "N/A"
         })
 
     except Exception as e:
@@ -127,8 +157,15 @@ def sentiment():
     symbol = get_symbol(query)
 
     try:
-        url = f"https://news.google.com/rss/search?q={symbol}+stock"
-        feed = feedparser.parse(url)
+        # Use a real browser User-Agent to avoid being blocked by Google
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        url = f"https://news.google.com/rss/search?q={symbol}"
+        
+        # Fetch the content first with headers to bypass 403 errors
+        response = requests.get(url, headers=headers)
+        feed = feedparser.parse(response.content)
 
         headlines = [entry.title for entry in feed.entries[:5]]
 
