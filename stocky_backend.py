@@ -108,28 +108,45 @@ def sentiment():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------------- 4. CHAT ROUTE (TUTOR UPGRADE) ----------------
+# ---------------- 5. CHAT ROUTE ----------------
 @app.route("/chat", methods=["GET", "POST"])
 def chat():
-    user_message = request.args.get("message") or (request.get_json().get("message") if request.is_json else "")
-    if not user_message: return jsonify({"reply": "Please ask something."})
+    # Safely parse incoming data whether it is a GET or POST request
+    data = request.get_json(silent=True) or {}
+    user_message = request.args.get("message") or data.get("message", "")
+    
+    if not user_message: 
+        return jsonify({"reply": "Please ask something."})
 
+    # If the client exists, attempt to hit the Gemini API
     if client:
         try:
-            # We add a System Instruction to make the AI act like a teacher
             response = client.models.generate_content(
-                model=MODEL_NAME,
-                contents=user_message,
-                config=types.GenerateContentConfig(
-                    system_instruction="You are Stocky, an expert financial tutor. Your goal is to teach the user about the stock market. Explain complex financial concepts in simple, easy-to-understand terms. Keep answers concise."
-                )
+                model=MODEL_NAME, 
+                contents=user_message
             )
             return jsonify({"reply": response.text})
         except Exception as e:
+            # Return the exact error to the UI so you can see what went wrong
             print("GEMINI API ERROR:", e)
+            return jsonify({"reply": f"AI Connection Error: {str(e)}"})
+    else:
+        print("WARNING: Gemini Client is missing.")
 
-    return jsonify({"reply": "I'm in offline mode right now."})
-
+    # --- OFFLINE FALLBACK LOGIC (Only runs if client is None) ---
+    msg = user_message.lower()
+    symbol = next((t for c, t in stock_map.items() if c in msg or t.lower() in msg), None)
+    
+    if symbol and any(term in msg for term in ["price", "market cap"]):
+        try:
+            _, fast_info, info, _ = fetch_snapshot(symbol)
+            # Use attribute access for fast_info, as it acts like a property object, not a dict
+            price = fast_info.last_price 
+            return jsonify({"reply": f"The current price of {symbol} is ${price:.2f}."})
+        except Exception as e:
+            print("Offline fetch error:", e)
+            
+    return jsonify({"reply": "I'm in offline mode. Please add your GEMINI_API_KEY to Render's Environment variables!"})
 # ---------------- 5. PREDICT ROUTE ----------------
 @app.route("/predict")
 def predict():
