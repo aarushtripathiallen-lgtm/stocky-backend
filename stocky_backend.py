@@ -75,6 +75,7 @@ def chat():
 
 # ---------------- RUN (FIXED PORT BINDING) ----------------
 if __name__ == "__main__":
-    # Render provides the PORT variable. Use it, or default to 10000.
-    port = int(os.environ.get("PORT", 10000))
+    # Render sets the PORT environment variable.
+    # If it is not set (like when running locally), default to 5000.
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
