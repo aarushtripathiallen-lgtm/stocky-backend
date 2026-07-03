@@ -12,8 +12,13 @@ from dotenv import load_dotenv
 load_dotenv() 
 api_key = os.getenv("GEMINI_API_KEY")
 
-# INIT AI
-client = genai.Client(api_key=api_key) if api_key else None
+# INIT AI - Upgraded to latest model
+if api_key:
+    client = genai.Client(api_key=api_key)
+    MODEL_NAME = "gemini-2.0-flash" 
+else:
+    print("WARNING: No Gemini API Key found.")
+    client = None
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -27,74 +32,49 @@ def get_symbol(query):
     query = query.lower().strip()
     return stock_map.get(query, query.upper())
 
-def format_market_cap(value):
-    if value in (None, "N/A"): return "N/A"
-    try:
-        val = float(value)
-        abs_val = abs(val)
-        if abs_val >= 1e12: return f"${val / 1e12:.2f}T"
-        if abs_val >= 1e9: return f"${val / 1e9:.2f}B"
-        return f"${val / 1e6:.2f}M"
-    except: return "N/A"
-
 def fetch_snapshot(symbol):
     ticker = yf.Ticker(symbol)
-    # Using .info is more reliable for fundamental data
     info = ticker.info or {}
     fast_info = ticker.fast_info or {}
-    history = ticker.history(period="1y")
-    return ticker, fast_info, info, history
+    hist = ticker.history(period="1d")
+    return fast_info, info, hist
 
 # ---------------- CHAT (FIXED) ----------------
 @app.route("/chat", methods=["GET", "POST"])
 def chat():
-    user_message = request.args.get("message", "")
-    if not user_message and request.is_json:
-        user_message = request.get_json().get("message", "")
-
+    # Supports both URL params and JSON body
+    user_message = request.args.get("message") or (request.get_json().get("message") if request.is_json else "")
+    
     if not user_message:
         return jsonify({"reply": "Please ask something."})
 
-    # TRY GEMINI
+    # TRY GEMINI (LATEST MODEL)
     if client:
         try:
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model=MODEL_NAME,
                 contents=user_message
             )
-            if response and hasattr(response, "text"):
-                return jsonify({"reply": response.text})
+            return jsonify({"reply": response.text})
         except Exception as e:
-            print("GEMINI CHAT FAILED:", e)
+            print("GEMINI API ERROR:", e)
 
-    # FALLBACK BOT
+    # FALLBACK LOGIC
     msg = user_message.lower()
-    mentioned_symbol = None
-    for company, ticker in stock_map.items():
-        if company in msg or ticker.lower() in msg:
-            mentioned_symbol = ticker
-            break
+    symbol = next((ticker for company, ticker in stock_map.items() if company in msg or ticker.lower() in msg), None)
 
-    # Improved logic to detect intent
-    if any(term in msg for term in ["price", "market cap", "p/e"]):
-        symbol = mentioned_symbol or "AAPL"
+    if symbol and any(term in msg for term in ["price", "market cap"]):
         try:
-            _, fast_info, info, hist_1y = fetch_snapshot(symbol)
-            latest = fast_info.get("last_price")
-            if not latest and not hist_1y.empty:
-                latest = float(hist_1y["Close"].iloc[-1])
-            
-            cap = format_market_cap(fast_info.get("market_cap") or info.get("marketCap"))
-            pe = info.get("trailingPE") or info.get("forwardPE")
-            
-            reply = (f"Snapshot for {symbol}: Price ${latest:.2f}, "
-                     f"Market Cap {cap}, P/E {pe:.2f if pe else 'N/A'}.")
-            return jsonify({"reply": reply})
-        except Exception as e:
-            print("SNAPSHOT ERROR:", e)
-            return jsonify({"reply": "I couldn't pull a live snapshot right now."})
+            fast_info, info, _ = fetch_snapshot(symbol)
+            price = fast_info.get("last_price", "N/A")
+            return jsonify({"reply": f"The current price of {symbol} is ${price}."})
+        except:
+            return jsonify({"reply": "I couldn't fetch data for that stock."})
 
-    return jsonify({"reply": "I'm in offline mode. Try: 'AAPL price' or 'TSLA sentiment'."})
+    return jsonify({"reply": "I'm in offline mode. Try asking about a specific stock like 'What is the price of Apple?'"})
 
+# ---------------- RUN (FIXED PORT BINDING) ----------------
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    # Render provides the PORT variable. Use it, or default to 10000.
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
